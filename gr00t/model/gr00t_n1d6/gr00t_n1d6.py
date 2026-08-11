@@ -198,15 +198,36 @@ class Gr00tN1d6ActionHead(nn.Module):
         # Embed noised action trajectory.
         actions = action_input.action
         noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
-        t = self.sample_time(actions.shape[0], device=actions.device, dtype=actions.dtype)
-        t = t[:, None, None]  # shape (B,1,1) for broadcast
+        B, Ta = actions.shape[0], actions.shape[1]
+        D_rtc = int(getattr(self.config, "rtc_simulated_delay", 0) or 0)
 
-        noisy_trajectory = (1 - t) * noise + t * actions
+        prefix_mask = None  # RTC frozen-prefix mask, (B, Ta) True where frozen
+        if D_rtc > 0:
+            # --- RTC training-time action conditioning (arXiv 2512.05964) ---
+            # Per sample: freeze a random prefix of d action tokens at t=1 (= clean, ground-truth)
+            # and train ONLY the suffix, so the model learns to CONTINUE from a committed prefix.
+            # Deploy then hard-freezes the executed prefix + a plain (TRT) forward, no VJP.
+            # d ~ p(d) ∝ exp(D-1-d)  (heavily toward d=0, exp tail up to D-1).
+            t_s = self.sample_time(B, device=actions.device, dtype=actions.dtype)  # (B,)
+            _idx = torch.arange(D_rtc, device=actions.device, dtype=torch.float32)
+            _w = torch.exp((D_rtc - 1) - _idx)  # decreasing in d
+            delay = torch.multinomial(_w / _w.sum(), B, replacement=True)  # (B,) in [0, D_rtc)
+            _steps = torch.arange(Ta, device=actions.device)[None, :]  # (1, Ta)
+            prefix_mask = _steps < delay[:, None]  # (B, Ta)
+            tau = torch.where(prefix_mask, torch.ones_like(t_s)[:, None], t_s[:, None])  # (B, Ta)
+            tau_e = tau.unsqueeze(-1)  # (B, Ta, 1)
+            noisy_trajectory = (1 - tau_e) * noise + tau_e * actions  # prefix clean, suffix noisy
+            enc_time = (tau * self.num_timestep_buckets).long()  # (B, Ta) PER-TOKEN
+            state_time_1d = (t_s * self.num_timestep_buckets).long()  # (B,) for the state slots
+        else:
+            t = self.sample_time(B, device=actions.device, dtype=actions.dtype)
+            t = t[:, None, None]  # shape (B,1,1) for broadcast
+            noisy_trajectory = (1 - t) * noise + t * actions
+            enc_time = (t[:, 0, 0] * self.num_timestep_buckets).long()  # (B,)
+            state_time_1d = None
+
         velocity = actions - noise
-
-        # Convert (continuous) t -> discrete if needed
-        t_discretized = (t[:, 0, 0] * self.num_timestep_buckets).long()
-        action_features = self.action_encoder(noisy_trajectory, t_discretized, embodiment_id)
+        action_features = self.action_encoder(noisy_trajectory, enc_time, embodiment_id)
 
         # Maybe add position embedding.
         if self.config.add_pos_embed:
@@ -218,6 +239,17 @@ class Gr00tN1d6ActionHead(nn.Module):
         sa_embs = torch.cat((state_features, action_features), dim=1)
         vl_attn_mask = backbone_output.backbone_attention_mask
 
+        # DiT timestep: per-sample scalar normally; PER-TOKEN over [state ; action] for RTC so the
+        # DiT modulates the frozen prefix as clean (t=1) and the suffix as noisy. State slots keep
+        # the sampled t (as in pretraining — warm-start friendly); action slots carry tau.
+        if D_rtc > 0:
+            n_state = state_features.shape[1]
+            dit_timestep = torch.cat(
+                [state_time_1d[:, None].expand(B, n_state), enc_time], dim=1
+            )  # (B, n_state + Ta)
+        else:
+            dit_timestep = enc_time  # (B,)
+
         if self.config.use_alternate_vl_dit:
             image_mask = backbone_output.image_mask
             backbone_attention_mask = backbone_output.backbone_attention_mask
@@ -225,7 +257,7 @@ class Gr00tN1d6ActionHead(nn.Module):
                 hidden_states=sa_embs,
                 encoder_hidden_states=vl_embeds,
                 encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
+                timestep=dit_timestep,
                 return_all_hidden_states=True,
                 image_mask=image_mask,
                 backbone_attention_mask=backbone_attention_mask,
@@ -235,7 +267,7 @@ class Gr00tN1d6ActionHead(nn.Module):
                 hidden_states=sa_embs,
                 encoder_hidden_states=vl_embeds,
                 encoder_attention_mask=vl_attn_mask,
-                timestep=t_discretized,
+                timestep=dit_timestep,
                 return_all_hidden_states=True,
             )
 
@@ -244,6 +276,9 @@ class Gr00tN1d6ActionHead(nn.Module):
 
         # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask
+        if prefix_mask is not None:
+            # RTC: train ONLY the suffix — the prefix is given (frozen), not predicted.
+            action_mask = action_mask * (~prefix_mask).unsqueeze(-1).to(action_mask.dtype)
         action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
         loss = action_loss.sum() / (action_mask.sum() + 1e-6)
 

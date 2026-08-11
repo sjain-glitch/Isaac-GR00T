@@ -184,15 +184,15 @@ class MultiEmbodimentActionEncoder(nn.Module):
         """
         B, T, _ = actions.shape
 
-        # 1) Expand each batch's single scalar time 'tau' across all T steps
-        #    so that shape => (B, T)
-        #    e.g. if timesteps is (B,), replicate across T
+        # 1) Time per action step, shape => (B, T).
+        #    Standard flow matching passes one scalar per batch item (B,) -> replicate across T.
+        #    RTC (rtc_simulated_delay > 0) passes PER-TOKEN time (B, T) already (prefix frozen at
+        #    t=1, suffix at t) -> use it directly. pos_encoding below already handles (B, T).
         if timesteps.dim() == 1 and timesteps.shape[0] == B:
-            # shape (B,) => (B,T)
-            timesteps = timesteps.unsqueeze(1).expand(-1, T)
-        else:
+            timesteps = timesteps.unsqueeze(1).expand(-1, T)  # (B,) -> (B, T)
+        elif timesteps.shape != (B, T):
             raise ValueError(
-                "Expected `timesteps` to have shape (B,) so we can replicate across T."
+                f"Expected `timesteps` of shape (B,) or (B, T)=({B},{T}); got {tuple(timesteps.shape)}."
             )
 
         # 2) Standard action MLP step for shape => (B, T, w)

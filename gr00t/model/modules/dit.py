@@ -17,6 +17,12 @@ class TimestepEncoder(nn.Module):
 
     def forward(self, timesteps):
         dtype = next(self.parameters()).dtype
+        # RTC: support PER-TOKEN timesteps (N, T) -> (N, T, D) in addition to (N,) -> (N, D).
+        if timesteps.dim() == 2:
+            n, t = timesteps.shape
+            proj = self.time_proj(timesteps.reshape(-1)).to(dtype)
+            emb = self.timestep_embedder(proj)  # (N*T, D)
+            return emb.reshape(n, t, -1)  # (N, T, D)
         timesteps_proj = self.time_proj(timesteps).to(dtype)
         timesteps_emb = self.timestep_embedder(timesteps_proj)  # (N, D)
         return timesteps_emb
@@ -43,8 +49,12 @@ class AdaLayerNorm(nn.Module):
         temb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         temb = self.linear(self.silu(temb))
-        scale, shift = temb.chunk(2, dim=1)
-        x = self.norm(x) * (1 + scale[:, None]) + shift[:, None]
+        # RTC: chunk on the FEATURE axis so this works for both (N, 2D) and (N, T, 2D);
+        # broadcast a token axis only for the legacy per-sample (N, D) path.
+        scale, shift = temb.chunk(2, dim=-1)
+        if scale.dim() == 2:  # (N, D) per-sample -> broadcast over tokens
+            scale, shift = scale[:, None], shift[:, None]
+        x = self.norm(x) * (1 + scale) + shift  # per-token when temb was (N, T, D)
         return x
 
 
@@ -278,8 +288,12 @@ class DiT(ModelMixin, ConfigMixin):
 
         # Output processing
         conditioning = temb
-        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
-        hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+        # RTC: chunk on the feature axis (works for (N,2D) and (N,T,2D)); broadcast a token
+        # axis only for the legacy per-sample (N, D) conditioning.
+        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=-1)
+        if scale.dim() == 2:
+            scale, shift = scale[:, None], shift[:, None]
+        hidden_states = self.norm_out(hidden_states) * (1 + scale) + shift
         if return_all_hidden_states:
             return self.proj_out_2(hidden_states), all_hidden_states
         else:
@@ -356,8 +370,12 @@ class AlternateVLDiT(DiT):
 
         # Output processing
         conditioning = temb
-        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=1)
-        hidden_states = self.norm_out(hidden_states) * (1 + scale[:, None]) + shift[:, None]
+        # RTC: chunk on the feature axis (works for (N,2D) and (N,T,2D)); broadcast a token
+        # axis only for the legacy per-sample (N, D) conditioning.
+        shift, scale = self.proj_out_1(F.silu(conditioning)).chunk(2, dim=-1)
+        if scale.dim() == 2:
+            scale, shift = scale[:, None], shift[:, None]
+        hidden_states = self.norm_out(hidden_states) * (1 + scale) + shift
         if return_all_hidden_states:
             return self.proj_out_2(hidden_states), all_hidden_states
         else:

@@ -88,6 +88,12 @@ class Gr00tN1d6Config(PretrainedConfig):
     noise_beta_beta: float = 1.0
     noise_s: float = 0.999
     num_timestep_buckets: int = 1000
+    # RTC (Real-Time Chunking) training-time action conditioning (arXiv 2512.05964).
+    # 0 = OFF (standard scalar-time flow matching, unchanged). >0 = max simulated delay D:
+    # per-sample a delay d~exp-decay over [0,D) freezes the first d action tokens at t=1
+    # (clean) and trains only the suffix, so the model learns to continue from a frozen
+    # prefix (deploy: hard-freeze the executed prefix + plain TRT forward, no VJP).
+    rtc_simulated_delay: int = 0
 
     # Training parameters
     tune_projector: bool = True
