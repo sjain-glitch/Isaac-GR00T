@@ -243,7 +243,7 @@ class Gr00tN1d6ActionHead(nn.Module):
         # DiT timestep: per-sample scalar normally; PER-TOKEN over [state ; action] for RTC so the
         # DiT modulates the frozen prefix as clean (t=1) and the suffix as noisy. State slots keep
         # the sampled t (as in pretraining — warm-start friendly); action slots carry tau.
-        if D_rtc > 0:
+        if D_max > 0:
             n_state = state_features.shape[1]
             dit_timestep = torch.cat(
                 [state_time_1d[:, None].expand(B, n_state), enc_time], dim=1
