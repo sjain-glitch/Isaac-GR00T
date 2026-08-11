@@ -283,6 +283,23 @@ class Gr00tN1d6ActionHead(nn.Module):
         action_loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
         loss = action_loss.sum() / (action_mask.sum() + 1e-6)
 
+        # RTC runtime PROOF: fires ONLY when the RTC branch actually ran (prefix_mask is not
+        # None => the per-token freeze executed), logging the real sampled delays, the frozen
+        # fraction, and how many action tokens the loss is masked to. If this line appears in
+        # the training log, RTC is provably active in the forward — not merely configured.
+        if prefix_mask is not None:
+            _n = globals().setdefault("_RTC_FWD_N", 0)
+            if _n < 3:
+                import sys as _sys
+                print(
+                    f"[RTC-FWD] ACTIVE d~U[{D_min},{D_max}] delays={delay[:min(8, B)].tolist()} "
+                    f"frozen_frac={prefix_mask.float().mean().item():.3f} "
+                    f"suffix_loss_tok={int((~prefix_mask).sum().item())}/{prefix_mask.numel()} "
+                    f"loss={loss.item():.4f}",
+                    file=_sys.stderr, flush=True,
+                )
+                globals()["_RTC_FWD_N"] = _n + 1
+
         return {
             "loss": loss,
             "action_loss": action_loss,
