@@ -199,19 +199,20 @@ class Gr00tN1d6ActionHead(nn.Module):
         actions = action_input.action
         noise = torch.randn(actions.shape, device=actions.device, dtype=actions.dtype)
         B, Ta = actions.shape[0], actions.shape[1]
-        D_rtc = int(getattr(self.config, "rtc_simulated_delay", 0) or 0)
+        D_min = int(getattr(self.config, "rtc_delay_min", 0) or 0)
+        D_max = int(getattr(self.config, "rtc_delay_max", 0) or 0)
 
         prefix_mask = None  # RTC frozen-prefix mask, (B, Ta) True where frozen
-        if D_rtc > 0:
+        if D_max > 0:
             # --- RTC training-time action conditioning (arXiv 2512.05964) ---
             # Per sample: freeze a random prefix of d action tokens at t=1 (= clean, ground-truth)
             # and train ONLY the suffix, so the model learns to CONTINUE from a committed prefix.
             # Deploy then hard-freezes the executed prefix + a plain (TRT) forward, no VJP.
-            # Delay d ~ Uniform{0, .., D-1} (Pi RTC uniform recipe). d=0 keeps base generation;
-            # d>0 freezes that many committed steps. (GR00T's Beta *time* sampling is kept as-is
-            # to match the pretrained checkpoint we warm-start from.)
+            # Delay d ~ Uniform{D_min .. D_max} INCLUSIVE — the DEPLOY latency band ONLY
+            # (e.g. 120-200 ms @ 30 Hz -> d in {4,5,6}). GR00T's Beta *time* sampling is kept
+            # as-is to match the pretrained checkpoint we warm-start from.
             t_s = self.sample_time(B, device=actions.device, dtype=actions.dtype)  # (B,)
-            delay = torch.randint(0, D_rtc, (B,), device=actions.device)  # (B,) in [0, D_rtc)
+            delay = torch.randint(D_min, D_max + 1, (B,), device=actions.device)  # (B,) in [D_min, D_max]
             _steps = torch.arange(Ta, device=actions.device)[None, :]  # (1, Ta)
             prefix_mask = _steps < delay[:, None]  # (B, Ta)
             tau = torch.where(prefix_mask, torch.ones_like(t_s)[:, None], t_s[:, None])  # (B, Ta)

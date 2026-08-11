@@ -127,11 +127,12 @@ except Exception as e:  # noqa: BLE001
 
 # ---------------------------------------------------------------- 5. RTC forward tensor-logic
 print("5. gr00t_n1d6 forward RTC tensor-logic")
-B, Ta, adim, buckets, D_rtc, n_state = 4, 50, 30, 1000, 8, 5
+B, Ta, adim, buckets, n_state = 4, 50, 30, 1000, 5
+D_min, D_max = 4, 6  # 120-200 ms @ 30 Hz deploy band
 actions = torch.randn(B, Ta, adim)
 noise = torch.randn(B, Ta, adim)
 t_s = torch.rand(B)
-delay = torch.randint(0, D_rtc, (B,))  # Uniform{0..D-1} (Pi RTC uniform recipe)
+delay = torch.randint(D_min, D_max + 1, (B,))  # Uniform{D_min..D_max} inclusive
 _steps = torch.arange(Ta)[None, :]
 prefix_mask = _steps < delay[:, None]
 tau = torch.where(prefix_mask, torch.ones_like(t_s)[:, None], t_s[:, None])
@@ -148,7 +149,7 @@ check("noisy shape (B,Ta,adim)", tuple(noisy.shape) == (B, Ta, adim))
 check("enc_time shape (B,Ta)", tuple(enc_time.shape) == (B, Ta))
 check("dit_timestep shape (B,n_state+Ta)", tuple(dit_timestep.shape) == (B, n_state + Ta))
 check("loss mask shape (B,Ta,1)", tuple(action_mask_rtc.shape) == (B, Ta, 1))
-check("delay in [0,D_rtc)", bool(((delay >= 0) & (delay < D_rtc)).all()))
+check("delay in [D_min,D_max]", bool(((delay >= D_min) & (delay <= D_max)).all()))
 # frozen prefix must be exactly the clean action (t=1)
 clean_ok = all(torch.allclose(noisy[b, : delay[b]], actions[b, : delay[b]], atol=1e-6) for b in range(B))
 check("frozen prefix == clean actions", clean_ok)
