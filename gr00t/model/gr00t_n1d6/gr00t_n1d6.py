@@ -207,11 +207,11 @@ class Gr00tN1d6ActionHead(nn.Module):
             # Per sample: freeze a random prefix of d action tokens at t=1 (= clean, ground-truth)
             # and train ONLY the suffix, so the model learns to CONTINUE from a committed prefix.
             # Deploy then hard-freezes the executed prefix + a plain (TRT) forward, no VJP.
-            # d ~ p(d) ∝ exp(D-1-d)  (heavily toward d=0, exp tail up to D-1).
+            # Delay d ~ Uniform{0, .., D-1} (Pi RTC uniform recipe). d=0 keeps base generation;
+            # d>0 freezes that many committed steps. (GR00T's Beta *time* sampling is kept as-is
+            # to match the pretrained checkpoint we warm-start from.)
             t_s = self.sample_time(B, device=actions.device, dtype=actions.dtype)  # (B,)
-            _idx = torch.arange(D_rtc, device=actions.device, dtype=torch.float32)
-            _w = torch.exp((D_rtc - 1) - _idx)  # decreasing in d
-            delay = torch.multinomial(_w / _w.sum(), B, replacement=True)  # (B,) in [0, D_rtc)
+            delay = torch.randint(0, D_rtc, (B,), device=actions.device)  # (B,) in [0, D_rtc)
             _steps = torch.arange(Ta, device=actions.device)[None, :]  # (1, Ta)
             prefix_mask = _steps < delay[:, None]  # (B, Ta)
             tau = torch.where(prefix_mask, torch.ones_like(t_s)[:, None], t_s[:, None])  # (B, Ta)

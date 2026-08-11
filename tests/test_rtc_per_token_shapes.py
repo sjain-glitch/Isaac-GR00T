@@ -131,9 +131,7 @@ B, Ta, adim, buckets, D_rtc, n_state = 4, 50, 30, 1000, 8, 5
 actions = torch.randn(B, Ta, adim)
 noise = torch.randn(B, Ta, adim)
 t_s = torch.rand(B)
-_idx = torch.arange(D_rtc, dtype=torch.float32)
-_w = torch.exp((D_rtc - 1) - _idx)
-delay = torch.multinomial(_w / _w.sum(), B, replacement=True)
+delay = torch.randint(0, D_rtc, (B,))  # Uniform{0..D-1} (Pi RTC uniform recipe)
 _steps = torch.arange(Ta)[None, :]
 prefix_mask = _steps < delay[:, None]
 tau = torch.where(prefix_mask, torch.ones_like(t_s)[:, None], t_s[:, None])

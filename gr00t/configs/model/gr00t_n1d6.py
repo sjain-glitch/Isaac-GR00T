@@ -90,9 +90,10 @@ class Gr00tN1d6Config(PretrainedConfig):
     num_timestep_buckets: int = 1000
     # RTC (Real-Time Chunking) training-time action conditioning (arXiv 2512.05964).
     # 0 = OFF (standard scalar-time flow matching, unchanged). >0 = max simulated delay D:
-    # per-sample a delay d~exp-decay over [0,D) freezes the first d action tokens at t=1
-    # (clean) and trains only the suffix, so the model learns to continue from a frozen
-    # prefix (deploy: hard-freeze the executed prefix + plain TRT forward, no VJP).
+    # per-sample a delay d ~ Uniform{0..D-1} freezes the first d action tokens at t=1 (clean)
+    # and trains only the suffix, so the model learns to continue from a frozen prefix
+    # (deploy: hard-freeze the executed prefix + plain TRT forward, no VJP). Set D >= deploy
+    # d = ceil(latency*control_hz); e.g. 120-200 ms @ 30 Hz -> d 4-6 -> D=8.
     rtc_simulated_delay: int = 0
 
     # Training parameters
